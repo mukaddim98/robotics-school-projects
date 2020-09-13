@@ -1,0 +1,323 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+
+
+<!--list of constants-->
+<constant value="0" name="STOPPED"/>
+<constant value="1" name="LEFT_TURN"/>
+<constant value="2" name="FORWARD"/>
+<constant value="3" name="LEFT_TILT"/>
+<constant value="4" name="RIGHT_TILT"/>
+<constant value="5" name="ROTATE"/>
+<constant value="6" name="TRACK_BACK"/>
+<constant value="7" name="BLOCKED"/>
+<constant value="8" name="BACKWARD"/>
+<constant value="9" name="FOUND"/>
+<constant value="10" name="DOMINION"/>
+<constant value="11" name="ATTACK"/>
+<constant value="12" name="RETREAT"/>
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="1" name="thymio-II"># when the program is LOADED and RUN
+var state # STATE of the robot
+var right # if robot makes RIGHT (right=1) or LEFT (right=0) turn during lawn mowing 
+var hit # if the robot HIT the black line on left turn (hit=1 when it hits black line)
+var first_pass # if the robot is going FORWARD for the first time (intially first_pass = 0)
+var max
+var min
+var mean
+var stop
+
+
+# starts with STOPPED state
+callsub stopped
+
+# when we press the FORWARD BUTTON
+onevent button.forward
+	timer.period[1] = 30000
+	callsub left_turn
+
+# when we press the BACKWARD BUTTON
+onevent button.backward
+	callsub stopped 
+	
+# when TIMER 1 runs out
+onevent timer1
+	timer.period[1] = 0
+	if stop == 0 then
+		stop = 1
+		timer.period[1] = 30000
+	else
+		callsub stopped
+		call leds.circle(255, 255, 255, 255, 255, 255, 255, 255)
+	end
+	
+		
+
+# when robot senses black line
+onevent prox
+	if  state != STOPPED then
+		# if it was TURNING LEFT
+		if  state == LEFT_TURN then
+			if prox.ground.delta[0] &lt; 200 or prox.ground.delta[1] &lt; 200 then
+				# goes to FOUND state
+				callsub found
+			end
+			
+		elseif  state == FORWARD or state == LEFT_TILT or state == RIGHT_TILT then
+			call math.stat(prox.horizontal[0:4], min, max, mean)
+			if max > 0 and first_pass == 0 then
+				callsub blocked
+	
+
+			# if black spot sensed then ROTATE	
+			elseif (prox.ground.delta[0] > 50 and prox.ground.delta[0] &lt; 80) or (prox.ground.delta[1] > 50 and prox.ground.delta[1] &lt; 80) then
+				callsub dominion
+			
+			#*	
+			# if boundary reached
+			elseif prox.ground.delta[0] > 700 or prox.ground.delta[1] > 700 then
+			#	callsub forward
+			#else
+				if prox.ground.delta[0] &lt; 800 or prox.ground.delta[1] &lt; 800 then
+					callsub backward
+				end
+			*#	
+			end		
+	
+		elseif  state == DOMINION then
+			call math.stat(prox.horizontal[0:6],min,max,mean)
+			if  max > 0 then
+				while prox.horizontal[2] &lt;= min do
+					motor.left.target = -500
+					motor.right.target = 500
+				end
+				callsub attack	
+			end
+			
+		elseif  state == RETREAT then
+			# if senses grey circle
+			if (prox.ground.delta[0] > 500 and prox.ground.delta[0] &lt; 600) or (prox.ground.delta[1] > 500 and prox.ground.delta[1] &lt; 600) then
+				timer.period[0] = 0
+				callsub dominion
+			end
+			
+		end
+	end
+	
+			
+	
+		
+# when TIMER 0 runs out
+onevent timer0
+	timer.period[0] = 0
+	
+	# if robot was TRACKING BACK 
+	if  state == TRACK_BACK then
+		# if it has HIT the line then first lawn mowing turn will be RIGHT
+		if  hit == 1 then right = 0
+		# if it did not HIT the line then first lawn mowing turn will be LEFT
+		elseif  hit == 0 then right = 1
+		end
+		# go FORWARD
+		callsub forward
+		
+	# if the robot was moving FORWARD	
+	elseif  state == FORWARD then
+		first_pass = 1
+		# if it was making RIGHT TILT in lawn moving then TILT LEFT next time 
+		if  right == 1 then
+			callsub left_tilt
+			
+		# if it was making LEFT TILT in lawn moving then TILT RIGHT next time
+		elseif right == 0 then
+			callsub right_tilt
+		end
+			
+		
+		
+	
+	# if robot was TILTING	then go FORWARD	
+	elseif state == LEFT_TILT or state == RIGHT_TILT then
+		callsub forward
+	
+	elseif state == BLOCKED then
+		timer.period[0] = 0
+		timer.period[0] = 5000
+		callsub forward
+	
+	# if the robot was in TURNING LEFT or FOUND the line then TRACK BACK
+	elseif  state == LEFT_TURN then
+		callsub track_back
+	
+	elseif state == BACKWARD then
+		callsub rotate
+		
+	elseif state == ROTATE then
+		callsub forward		
+	
+	elseif state == ATTACK then
+		callsub retreat
+	
+	elseif state == RETREAT then
+		callsub forward
+	end
+	
+	
+	
+	
+#* 
+When the robot is going forward, it goes for 10 seconds for the first time.
+The variable first_pass checks if the robot has gone to FORWARD state for the
+first time and is initially set to 0. After it goes forward to 10 seconds,
+the next time it goes forward is for 2 seconds for the lawn mowing stuff.
+*#			
+sub forward
+	state = FORWARD
+	timer.period[0] = 0
+	call leds.top(0, 0, 255)
+	# motor settings are not equal to make sure it goes straight in the real environment
+	
+	# First time go FORWARD for 10 seconds
+	if first_pass == 0 then
+		if  hit == 1 then
+			motor.left.target = 500
+			motor.right.target = 460
+		else
+			motor.left.target = 500
+			motor.right.target = 430
+		end
+		
+		timer.period[0] = 11000
+	# Next time go FORWARD for 2 seconds for lawn mowing search
+	elseif first_pass == 1 then
+		motor.left.target = 500
+		motor.right.target = 460
+		timer.period[0] = 3000
+	end
+
+# This fuction cause the robot tilt left during lawn mowing		
+sub left_tilt
+	state = LEFT_TILT
+	motor.left.target = 0
+	motor.right.target = 500
+	right = 0
+	timer.period[0] = 1880 # tilts for 1.88 seconds
+
+# This fuction cause the robot tilt left during lawn mowing	
+sub right_tilt
+	state = RIGHT_TILT
+	motor.left.target = 500
+	motor.right.target = 0
+	right = 1
+	timer.period[0] = 1880 # tilts for 1.88 seconds
+			
+# This fuction cause the robot to stop and initialise all the variables
+sub stopped
+	state = STOPPED
+	timer.period[0] = 0
+	timer.period[1] = 0
+	call leds.top(0, 0, 0)
+	call leds.circle(0,0,0,0,0,0,0,0)
+	motor.right.target = 0
+	motor.left.target = 0
+	first_pass = 0
+	hit = 0
+	stop = 0
+
+# This function tells the robot to TURN LEFT on pressing the FORWARD BUTTON  
+sub left_turn
+	state = LEFT_TURN
+	call leds.top(0, 0, 0)
+	motor.left.target = 250
+	motor.right.target = 500
+	timer.period[0] = 2000
+
+
+# This function tells the robot to TRACK BACK
+sub track_back
+	state = TRACK_BACK
+	timer.period[0] = 0
+	motor.left.target = -motor.left.target
+	motor.right.target = -motor.right.target
+	timer.period[0] = 2200
+
+# This function tells the robot that it has FOUND the line and therefore sets hit to 1
+sub found
+	state = FOUND
+	hit = 1
+	timer.period[0] = 0
+	call leds.top(0, 255, 0)
+	callsub track_back
+
+# to be used in future
+sub rotate
+	state = ROTATE
+	timer.period[0] = 0
+	call leds.top(0, 0, 0)
+	motor.left.target = -500
+	motor.right.target = 500
+	timer.period[0] = 1020
+	
+
+sub blocked
+	state = BLOCKED
+	timer.period[0] = 0
+	call leds.top(0,0,0)
+	motor.left.target = 0
+	motor.right.target = 0
+	timer.period[0] = 2000
+	
+sub backward	
+	state = BACKWARD
+	call leds.top(0,0,0)
+	motor.left.target = -500
+	motor.right.target = -500	
+	timer.period[0] = 500
+
+	
+sub dominion
+	state = DOMINION
+	timer.period[0] = 0
+	call leds.top(255, 255, 255)
+	motor.left.target = -500
+	motor.right.target = 500
+	
+sub attack
+	state = ATTACK
+	timer.period[0] = 0
+	call leds.top(255, 0, 0)
+	motor.left.target = 500
+	motor.right.target = 500
+	timer.period[0] = 2000
+	
+	
+sub retreat
+	state = RETREAT
+	timer.period[0] = 0
+	call leds.top(0,255,0)
+	motor.left.target = -500
+	motor.right.target = -500
+	timer.period[0] = 5000
+	
+		
+
+	
+
+
+	
+	
+	
+
+	</node>
+
+
+</network>

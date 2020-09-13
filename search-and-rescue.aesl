@@ -1,0 +1,416 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+
+
+<!--list of constants-->
+<constant value="100" name="HIT"/>
+<constant value="0" name="MISS"/>
+<constant value="32" name="LED"/>
+<constant value="4000" name="WHITE_TH"/>
+<constant value="2000" name="BLACK_TH"/>
+<constant value="500" name="THRESHOLD"/>
+<constant value="0" name="STOPPED"/>
+<constant value="1" name="FORWARD"/>
+<constant value="2" name="TURN"/>
+<constant value="3" name="SLOW_DOWN"/>
+<constant value="4" name="LEFT_ALLIGN"/>
+<constant value="5" name="APPROACH"/>
+<constant value="6" name="BACKOFF"/>
+<constant value="7" name="RIGHT_TURN"/>
+<constant value="8" name="SEARCH"/>
+<constant value="9" name="RECALL"/>
+<constant value="10" name="AVOID_TURN"/>
+<constant value="11" name="AVOID_FORWARD"/>
+<constant value="12" name="RESCUE_RETURN"/>
+<constant value="13" name="RESCUE_TURN"/>
+<constant value="14" name="CHECK_BLOCK"/>
+<constant value="15" name="RESCUE_FINISH"/>
+<constant value="16" name="RESCUE_BACK"/>
+<constant value="17" name="ROTATE"/>
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="1" name="thymio-II">## ALL VARIABLES AND INITIALIZATION ##
+
+var world[8]= [0,1,0,0,0,1,1,0]
+var beliefs[8]
+var i
+var hit # hit is 1 when robot's on dark grey box, hit is 0 when it's on light grey box 
+var temp
+var sum
+var count
+# stores values for the three LEDs
+var red var green var blue
+# stores values for the three front proximity sensors
+var s1 var s2 var s3 
+# array to store the LED values for the prisoner pattern
+var prisoner[3]
+var state
+# found is 1 if prisoner found, else it is 0 by default
+var found
+# if block is observed
+var block 
+var color
+
+## PROGRAM STARTS HERE ##
+
+
+callsub stop
+
+onevent button.backward
+	callsub stop 
+
+onevent button.right
+	callsub memorise
+
+onevent button.left
+	call sound.play(500)
+	motor.right.target = -50
+	motor.left.target = 50
+	timer.period[1] = 3600
+
+onevent button.forward
+	callsub display_beliefs
+	callsub backoff
+	
+onevent timer1
+	callsub stop
+	
+## PROX EVENT OCCURS ##		
+onevent prox	
+	if  state != STOPPED then
+		
+		if state == AVOID_FORWARD or state == FORWARD then
+			when prox.ground.delta[1] &lt; 850 do
+				callsub localize
+			end	
+		end
+		
+		if state == FORWARD  then
+			if (prox.ground.delta[0]&lt;450 or prox.ground.delta[1]&lt;450) then
+				callsub slowDown
+			end	
+
+		elseif state == LEFT_ALLIGN then
+			if (prox.ground.delta[0] &lt; 200) then
+				while (prox.ground.delta[0] &lt; 200) do
+					motor.left.target = -50
+					motor.right.target = 50
+				end
+				
+				callsub approach
+				
+		 	end
+		 	
+		 elseif state == ROTATE then
+			if (prox.ground.delta[0] &lt; 200) then
+				while (prox.ground.delta[0] &lt; 200) do
+					motor.left.target = -50
+					motor.right.target = 50
+				end
+				
+				callsub approach
+				
+		 	end
+			
+			
+		
+		elseif state == AVOID_TURN then
+			if (prox.ground.delta[1] &lt; 200) then
+				while prox.ground.delta[1] &lt; 200 do
+					motor.left.target = 50
+					motor.right.target = -50
+				end
+				callsub avoidForward	
+			end
+			
+		elseif state == CHECK_BLOCK then
+			if prox.horizontal[1] > 0  or prox.horizontal[2] > 0 or prox.horizontal[3] > 0 then
+				block = 1	
+			else
+				block = 0
+			end
+			callsub rescueReturn
+
+		elseif state == RESCUE_RETURN then
+			if (prox.ground.delta[0] &lt; 200) then
+				while prox.ground.delta[0] &lt; 200 do
+					motor.left.target = -50
+					motor.right.target = 50
+				end
+				callsub rescueFinish
+		 	end
+		
+		elseif state == APPROACH then
+			if (prox.ground.delta[0] >= 850 and prox.ground.delta[1] >= 850) then			
+				callsub searchPrisoner
+				callsub recallPrisoner
+				if found == 1 then
+					callsub rescueBack
+				else
+					callsub backoff
+				end		
+			end
+			
+		
+		end	
+	 end
+
+## TIMER RUNS OUT ##	
+onevent timer0
+	timer.period[0] = 0
+	if  state == SLOW_DOWN then
+		callsub leftAllign	
+		
+	elseif state == BACKOFF then
+		callsub rightTurn	
+		
+	elseif state == RIGHT_TURN then
+		if prox.horizontal[1] > 0  or prox.horizontal[2] > 0 or prox.horizontal[3] > 0  then 
+			callsub avoidTurn
+		else
+			callsub forward		
+		end	
+	
+	elseif  state == AVOID_FORWARD then	
+		callsub forward
+			
+	elseif  state == RESCUE_BACK then
+		callsub rescueTurn
+		
+	elseif state == RESCUE_TURN then
+		callsub checkBlock
+	
+	
+	elseif  state == RESCUE_FINISH then
+		callsub stop
+	end
+	
+
+## ALL SUBROUTINES ##	
+
+# Initialization 
+sub stop
+	state = STOPPED
+	timer.period[0] = 0
+	timer.period[1] = 0
+	call leds.circle(0,0,0,0,0,0,0,0)
+	call math.fill(beliefs, 1000/8)
+	motor.left.target = 0
+	motor.right.target = 0
+	red = 0
+	green = 0
+	blue = 0
+	hit = 0
+	call leds.top(0,0,0)	
+	prisoner=[0,0,0]
+	found = 0
+
+# Localization 						
+sub localize
+	callsub rotate
+	callsub sense
+	callsub display_beliefs
+	
+sub rotate
+	temp = beliefs[7]
+	for i in 7:1 step -1 do beliefs[i] = beliefs[i-1] end
+	beliefs[0] = temp
+
+sub sense	
+	# dark grey
+	when (prox.ground.delta[1] > 150 and prox.ground.delta[1] &lt; 700) do 
+		hit = 1 
+		call sound.play(500)
+		end
+	
+	# light grey	 
+	when (prox.ground.delta[1] > 700) do
+		hit = 0 
+
+		end
+		
+	for i in 0:7 do
+		if (hit==1 and world[i]==1) or (hit==0 and world[i]==0) then
+			call math.muldiv(beliefs[i], beliefs[i], HIT, 100)
+		else
+			call math.muldiv(beliefs[i], beliefs[i], MISS, 100)
+		end
+	end
+	callsub normalize
+
+sub normalize
+	sum = 0
+	for i in 0:7 do sum += beliefs[i] end
+	if  sum > 0 then
+		for i in 0:7 do call math.muldiv(beliefs[i], beliefs[i],1000,sum) end
+	else
+		call math.fill(beliefs,1000/8)
+	end
+	
+sub display_beliefs
+	call leds.circle( beliefs[0]/LED, beliefs[1]/LED, beliefs[2]/LED, beliefs[3]/LED, beliefs[4]/LED, beliefs[5]/LED, beliefs[6]/LED, beliefs[7]/LED)
+	
+# Memorizing
+sub memorise
+	callsub searchPrisoner
+	prisoner = [red,green,blue]
+	
+# Searching	
+sub searchPrisoner	
+	state = SEARCH
+	
+	red = 0
+	green = 0
+	blue = 0
+	
+	motor.left.target = 0
+	motor.right.target = 0
+	
+
+	s1 = prox.horizontal[1]
+	s2 = prox.horizontal[2]
+	s3 = prox.horizontal[3]
+
+	
+	# red = WBW
+	if s1 > WHITE_TH and s2 &lt; WHITE_TH and s3 > WHITE_TH then
+		red = 32
+		green = 0
+		blue = 0
+	
+	
+	# green = BBW
+	elseif s1 &lt; WHITE_TH and s2 &lt; WHITE_TH and s3 > WHITE_TH then
+		red = 0
+		green = 32
+		blue = 0
+	
+	
+	# blue = BWB
+	elseif s1 &lt; WHITE_TH and s2 > WHITE_TH and s3 &lt; WHITE_TH then
+		red = 0
+		green = 0
+		blue = 32
+	
+	
+	# white = WWB
+	elseif s1 > WHITE_TH and s2 > WHITE_TH and s3 &lt; WHITE_TH  then
+		red = 32
+		green = 32
+		blue = 32
+	end
+	
+	callsub displayLED
+	
+sub displayLED
+	call leds.top(red, green, blue)	
+	
+sub recallPrisoner
+	if prisoner[0] == red and  prisoner[1] == green and prisoner[2] == blue then
+		found = 1
+	end
+	
+# Move
+sub forward
+	state = FORWARD
+	call leds.top(0,0,0)
+	motor.left.target = 300
+	motor.right.target = 300
+
+sub slowDown
+	state = SLOW_DOWN
+	motor.left.target = 300
+	motor.right.target = 300
+	timer.period[0]= 600
+	
+		
+sub leftAllign
+	state = LEFT_ALLIGN
+	motor.left.target = -50
+	motor.right.target = 50
+
+sub approach
+	state = APPROACH
+	motor.left.target = 50
+	motor.right.target = 50
+	
+sub backoff
+	state = BACKOFF
+	motor.left.target=-50
+	motor.right.target=-50
+	timer.period[0] = 2000
+	
+sub rightTurn
+	state = RIGHT_TURN
+	call leds.top(0,0,0)
+	motor.left.target = 50
+	motor.right.target = -50
+	timer.period[0]= 3700
+
+
+# Rescueing
+sub rescueBack
+	state = RESCUE_BACK
+	motor.left.target=-50
+	motor.right.target=-50
+	timer.period[0] = 1500
+	
+sub checkBlock
+	state = CHECK_BLOCK
+	
+sub rescueTurn
+	state = RESCUE_TURN
+	motor.left.target = 50
+	motor.right.target = -50
+	timer.period[0]= 3700	
+
+sub rescueReturn
+	state = RESCUE_RETURN
+	motor.left.target = -50
+	motor.right.target = 50
+	
+sub rescueFinish
+	state = RESCUE_FINISH
+	if  block == 1 then
+		motor.left.target = -220
+		motor.right.target = -300
+		timer.period[0] = 5000
+	elseif  block == 0 then
+		motor.left.target = -300
+		motor.right.target = -300
+		timer.period[0] = 2500
+	end
+	
+	
+#Avoiding
+sub avoidTurn
+	state = AVOID_TURN
+	motor.left.target = 50
+	motor.right.target = -50	
+
+sub avoidForward
+	state = AVOID_FORWARD
+	motor.left.target = 300
+	motor.right.target = 300
+	timer.period[0] = 1200
+	
+sub rotateRob
+	state=ROTATE
+	motor.left.target = -50
+	motor.right.target = 50
+	
+
+
+	
+ </node>
+
+
+</network>
